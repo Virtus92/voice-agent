@@ -1,0 +1,36 @@
+# Voice Agent Dependencies
+# Python 3.9+
+
+# STT (Speech-to-Text) - Local
+faster-whisper>=1.2.0
+
+# LLM - Cloud (Groq)
+groq>=0.11.0
+langchain-groq>=0.2.0
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+
+# LLM - Local (Optional)
+ollama>=0.1.0  # Optional: only if using local LLM
+
+# TTS (Text-to-Speech) - Cloud
+elevenlabs>=2.16.0
+
+# Audio Processing
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.26.0
+
+# Tools & Web Integration
+wikipedia>=1.4.0
+ddgs>=9.6.0  # Updated from duckduckgo-search
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+lxml>=6.0.0
+
+# Telegram Bot (iPhone Testing)
+python-telegram-bot>=22.0
+
+# Utilities
+python-dotenv>=1.0.0
