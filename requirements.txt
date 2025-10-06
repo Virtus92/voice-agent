@@ -21,6 +21,10 @@ elevenlabs>=2.16.0
 sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.26.0
+scipy>=1.11.0  # For noise reduction
+
+# Web UI
+gradio>=4.44.0
 
 # Tools & Web Integration
 wikipedia>=1.4.0
