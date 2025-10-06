@@ -1,17 +1,17 @@
 """
 Gradio Web-UI für Voice Agent
-Echtzeit-Sprachinteraktion mit Noise-Handling
+Push-to-Talk wie ChatGPT Voice Mode
 """
 
 import gradio as gr
 import tempfile
 import os
-from pathlib import Path
 import numpy as np
 import soundfile as sf
+import scipy.signal as signal
 from voice_agent import VoiceAgent
 
-# Agent initialisieren (wird beim Start geladen)
+# Globaler Agent
 agent = None
 
 def initialize_agent():
@@ -29,13 +29,8 @@ def initialize_agent():
 
 
 def reduce_noise(audio_data, sample_rate):
-    """
-    Einfache Noise Reduction für laute Umgebungen
-    Verwendet High-Pass Filter und Normalisierung
-    """
-    import scipy.signal as signal
-
-    # High-pass filter um Rauschen zu reduzieren
+    """Noise Reduction für laute Umgebungen"""
+    # High-pass filter (100 Hz cutoff)
     sos = signal.butter(10, 100, 'hp', fs=sample_rate, output='sos')
     filtered = signal.sosfilt(sos, audio_data)
 
@@ -46,237 +41,213 @@ def reduce_noise(audio_data, sample_rate):
     return filtered
 
 
-def process_audio(audio_input, chat_history):
+def voice_chat(audio):
     """
-    Verarbeite Audio-Eingabe und generiere Antwort
-
-    Args:
-        audio_input: Tuple (sample_rate, audio_data) von Gradio
-        chat_history: Bisherige Konversationshistorie
-
-    Returns:
-        Tuple (chat_history, audio_output)
+    AUTOMATISCH getriggert wenn Recording stoppt
+    Audio → Transkription → Agent → Antwort
     """
-    if audio_input is None:
-        return chat_history, None
+    if audio is None:
+        return None, "🎤 Bereit - drücke Record und sprich!", None
 
     try:
-        # Agent initialisieren
         agent = initialize_agent()
 
-        # Audio extrahieren
-        sample_rate, audio_data = audio_input
+        sample_rate, audio_data = audio
 
-        # Noise Reduction für laute Umgebungen
+        # Konvertiere zu Float32 wenn nötig
+        if audio_data.dtype == np.int16:
+            audio_data = audio_data.astype(np.float32) / 32768.0
+        elif audio_data.dtype == np.int32:
+            audio_data = audio_data.astype(np.float32) / 2147483648.0
+
+        # Noise Reduction
         print("🔇 Reduziere Hintergrundgeräusche...")
         audio_data = reduce_noise(audio_data, sample_rate)
 
-        # Temporäre Datei für Audio erstellen
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_audio:
-            temp_path = temp_audio.name
+        # Speichere temporär
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as f:
+            temp_path = f.name
             sf.write(temp_path, audio_data, sample_rate)
 
-        print(f"📥 Verarbeite Audio: {temp_path}")
+        print(f"🗣️ Verarbeite Sprache...")
 
-        # Audio verarbeiten
-        result = agent.process(
-            audio_path=temp_path,
-            stream_audio=False
-        )
+        # Verarbeiten
+        result = agent.process(audio_path=temp_path, stream_audio=False)
 
-        # Temporäre Eingabe-Datei löschen
         os.unlink(temp_path)
 
-        # Chat-Historie aktualisieren
-        user_message = result['transcription']
-        bot_message = result['response']
+        # Audio-Antwort speichern
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as f:
+            response_path = f.name
+            f.write(result['audio'])
 
-        if chat_history is None:
-            chat_history = []
+        transcription_text = f"**🗣️ Du:** {result['transcription']}"
+        response_text = f"**🤖 Agent:** {result['response']}"
 
-        chat_history.append((user_message, bot_message))
+        print(f"✅ Fertig!")
 
-        # Audio-Antwort als temporäre Datei speichern
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_response:
-            response_path = temp_response.name
-            temp_response.write(result['audio'])
-
-        print(f"✅ Antwort generiert: {response_path}")
-
-        return chat_history, response_path
+        return response_path, transcription_text, response_text
 
     except Exception as e:
         print(f"❌ Fehler: {e}")
         import traceback
         traceback.print_exc()
-
-        error_msg = f"Fehler bei der Verarbeitung: {str(e)}"
-        if chat_history is None:
-            chat_history = []
-        chat_history.append(("Fehler", error_msg))
-
-        return chat_history, None
+        return None, f"❌ Fehler bei Aufnahme", f"Details: {str(e)}"
 
 
-def text_chat(message, chat_history):
-    """
-    Verarbeite Text-Eingabe (ohne Audio)
-
-    Args:
-        message: Text-Nachricht
-        chat_history: Bisherige Konversationshistorie
-
-    Returns:
-        Updated chat_history
-    """
-    if not message:
-        return chat_history
-
-    try:
-        # Agent initialisieren
-        agent = initialize_agent()
-
-        # Antwort generieren
-        response = agent.chat(message)
-
-        # Chat-Historie aktualisieren
-        if chat_history is None:
-            chat_history = []
-
-        chat_history.append((message, response))
-
-        return chat_history
-
-    except Exception as e:
-        print(f"❌ Fehler: {e}")
-        error_msg = f"Fehler: {str(e)}"
-        if chat_history is None:
-            chat_history = []
-        chat_history.append((message, error_msg))
-        return chat_history
-
-
-def reset_conversation():
-    """Setze Konversation zurück"""
+def reset():
+    """Reset Konversation"""
     global agent
     if agent:
         agent.reset_history()
-    return [], None
+    return None, "🔄 Neue Konversation gestartet", ""
 
+
+# Custom CSS
+custom_css = """
+#audio-input {
+    border: 3px dashed #6366f1;
+    border-radius: 16px;
+    padding: 24px;
+    background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+}
+
+#status-text {
+    font-size: 20px;
+    font-weight: 700;
+    text-align: center;
+    padding: 16px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    margin: 16px 0;
+}
+
+.transcription-box {
+    background: #f0f9ff;
+    border-left: 4px solid #3b82f6;
+    padding: 16px;
+    margin: 12px 0;
+    border-radius: 8px;
+}
+
+.response-box {
+    background: #f0fdf4;
+    border-left: 4px solid #22c55e;
+    padding: 16px;
+    margin: 12px 0;
+    border-radius: 8px;
+}
+"""
 
 # Gradio Interface
-with gr.Blocks(title="🎙️ Voice Agent - Deutscher Sprachassistent", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(css=custom_css, title="🎙️ Voice Agent", theme=gr.themes.Soft()) as demo:
 
     gr.Markdown("""
-    # 🎙️ Voice Agent - Deutscher Sprachassistent
+    # 🎙️ Voice Agent - Push-to-Talk wie ChatGPT
 
-    Sprechen Sie mit dem KI-Assistenten! Der Agent nutzt:
-    - 🗣️ Lokale Spracherkennung (faster-whisper)
-    - 🧠 Intelligentes LLM (Groq Llama 4 Maverick mit Tools)
-    - 🔊 Natürliche Sprachsynthese (ElevenLabs Flash v2.5)
-    - 🔇 Automatische Rauschunterdrückung für laute Umgebungen
+    ### 🚀 So einfach wie ChatGPT Voice Mode!
 
-    **Funktionen:** Web-Suche, Wikipedia, Rechner, Uhrzeit, Website-Abruf
+    **Anleitung:**
+    1. 🔴 Drücke **"Record"**
+    2. 🗣️ **Sprich** deine Frage
+    3. ⏹️ Drücke **"Stop"**
+    4. ⚡ Agent verarbeitet **automatisch** und antwortet!
+
+    **Keine Extra-Buttons nötig** - genau wie bei ChatGPT!
     """)
 
+    # Status Anzeige
+    status = gr.Markdown(
+        "### 🎤 Bereit - drücke Record und sprich!",
+        elem_id="status-text"
+    )
+
     with gr.Row():
-        with gr.Column(scale=2):
-            # Chat-Anzeige
-            chatbot = gr.Chatbot(
-                label="Konversation",
-                height=400,
-                show_label=True
+        with gr.Column(scale=1):
+            # HAUPTELEMENT: Audio Input
+            audio_input = gr.Audio(
+                label="🎙️ Push-to-Talk: Record → Sprechen → Stop",
+                type="numpy",
+                sources=["microphone"],
+                elem_id="audio-input",
+                streaming=False,
+                show_label=True,
+                format="wav"
             )
 
-            # Audio-Ausgabe
-            audio_output = gr.Audio(
-                label="🔊 Agent Antwort (Audio)",
-                type="filepath",
-                autoplay=True
-            )
+            gr.Markdown("""
+            **💡 Funktioniert auch bei Lärm!**
+            Einfach deutlich sprechen - Rauschunterdrückung läuft automatisch.
+            """)
 
         with gr.Column(scale=1):
-            # Tabs für Sprache und Text
-            with gr.Tab("🎤 Spracheingabe"):
-                gr.Markdown("""
-                ### Anleitung:
-                1. Klicke auf das Mikrofon
-                2. Sprich deine Frage
-                3. Warte auf Transkription und Antwort
+            # Transkription
+            transcription = gr.Markdown(
+                "",
+                elem_classes=["transcription-box"]
+            )
 
-                **Tipp:** Funktioniert auch in lauter Umgebung dank Rauschunterdrückung!
-                """)
+            # Agent Antwort
+            response = gr.Markdown(
+                "",
+                elem_classes=["response-box"]
+            )
 
-                audio_input = gr.Audio(
-                    label="🎤 Sprich mit dem Agent",
-                    type="numpy",
-                    sources=["microphone"]
-                )
-
-                submit_audio_btn = gr.Button("📤 Audio senden", variant="primary", size="lg")
-
-            with gr.Tab("💬 Texteingabe"):
-                gr.Markdown("""
-                ### Text-Chat
-                Schreibe deine Frage als Text.
-                """)
-
-                text_input = gr.Textbox(
-                    label="✍️ Deine Nachricht",
-                    placeholder="Was möchtest du wissen?",
-                    lines=3
-                )
-
-                submit_text_btn = gr.Button("📤 Text senden", variant="primary", size="lg")
-
-            # Reset Button
-            reset_btn = gr.Button("🔄 Konversation zurücksetzen", variant="secondary")
-
-    # Event Handler
-    submit_audio_btn.click(
-        fn=process_audio,
-        inputs=[audio_input, chatbot],
-        outputs=[chatbot, audio_output]
+    # Audio Output (Auto-Play)
+    audio_output = gr.Audio(
+        label="🔊 Agent Antwort (spielt automatisch ab)",
+        type="filepath",
+        autoplay=True,
+        visible=True
     )
 
-    submit_text_btn.click(
-        fn=text_chat,
-        inputs=[text_input, chatbot],
-        outputs=[chatbot]
-    ).then(
-        fn=lambda: "",
-        outputs=[text_input]
+    # Reset Button
+    with gr.Row():
+        reset_btn = gr.Button(
+            "🔄 Neue Konversation starten",
+            variant="secondary",
+            size="lg"
+        )
+
+    # EVENT: Automatisch triggern wenn Recording stoppt
+    audio_input.stop_recording(
+        fn=voice_chat,
+        inputs=[audio_input],
+        outputs=[audio_output, transcription, response]
     )
 
-    text_input.submit(
-        fn=text_chat,
-        inputs=[text_input, chatbot],
-        outputs=[chatbot]
-    ).then(
-        fn=lambda: "",
-        outputs=[text_input]
-    )
-
+    # Reset Event
     reset_btn.click(
-        fn=reset_conversation,
+        fn=reset,
         inputs=[],
-        outputs=[chatbot, audio_output]
+        outputs=[audio_output, transcription, response]
     )
 
     # Beispiele
     gr.Markdown("""
+    ---
+
     ## 💡 Beispiel-Fragen:
 
-    - "Was ist künstliche Intelligenz?"
-    - "Suche aktuelle Nachrichten über Technologie"
-    - "Wie spät ist es?"
-    - "Was ist 123 mal 456?"
-    - "Finde die besten Restaurants in Leonding"
-    """)
+    - **"Was ist künstliche Intelligenz?"** - Wikipedia-Suche
+    - **"Suche aktuelle Nachrichten über KI"** - Web-Suche
+    - **"Wie spät ist es?"** - Aktuelle Uhrzeit
+    - **"Was ist 15 mal 23?"** - Rechner
+    - **"Finde Restaurants in Leonding"** - Lokale Suche
 
-    # Footer
-    gr.Markdown("""
     ---
+
+    ## 🛠️ Features:
+
+    ✅ **Lokale Spracherkennung** (faster-whisper) - Datenschutz!
+    ✅ **Intelligentes LLM** (Groq Llama 4 Maverick) - Schnell & Smart!
+    ✅ **Premium Stimme** (ElevenLabs Flash v2.5) - Natürlich!
+    ✅ **Rauschunterdrückung** (Scipy) - Funktioniert überall!
+    ✅ **Web-Tools** - Suche, Wikipedia, Rechner, Zeit
+
+    ---
+
     **Entwickelt von Dinel Kurtovic** | [GitHub](https://github.com/Virtus92/voice-agent) | info@dinel.at
 
     Mit ❤️ für die AI-Community
@@ -284,11 +255,9 @@ with gr.Blocks(title="🎙️ Voice Agent - Deutscher Sprachassistent", theme=gr
 
 
 if __name__ == "__main__":
-    # Agent beim Start initialisieren (optional, für schnellere erste Anfrage)
-    print("🚀 Starte Voice Agent Web-UI...")
+    print("🚀 Starte Voice Agent Push-to-Talk UI...")
     initialize_agent()
 
-    # Demo starten
     demo.launch(
         share=False,
         server_name="0.0.0.0",
