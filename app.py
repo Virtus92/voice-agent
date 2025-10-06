@@ -124,19 +124,21 @@ custom_css = """
 }
 
 .transcription-box {
-    background: #f0f9ff;
+    background: #1e293b;
     border-left: 4px solid #3b82f6;
     padding: 16px;
     margin: 12px 0;
     border-radius: 8px;
+    color: #f0f9ff !important;
 }
 
 .response-box {
-    background: #f0fdf4;
+    background: #1e293b;
     border-left: 4px solid #22c55e;
     padding: 16px;
     margin: 12px 0;
     border-radius: 8px;
+    color: #f0fdf4 !important;
 }
 """
 
